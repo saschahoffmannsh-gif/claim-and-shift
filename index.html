@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Claim &amp; Shift – Prototyp</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Arial,sans-serif;background:#1e1f26;color:#eee;display:flex;flex-direction:column;align-items:center;min-height:100vh;touch-action:manipulation}
+h1{margin:12px 0 4px;font-size:24px}
+.panel{max-width:520px;width:100%;padding:10px}
+.rules{background:#2a2c36;border-radius:8px;padding:10px 14px;font-size:14px;line-height:1.45}
+.rules li{margin:3px 0}
+button{font-size:16px;padding:8px 14px;border-radius:6px;border:0;background:#4a7cff;color:#fff;cursor:pointer;margin:4px}
+button.sec{background:#444}
+button:disabled{opacity:.4}
+#board{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;width:min(92vw,440px);aspect-ratio:1;background:#2a2c36;padding:6px;border-radius:8px;margin:8px auto}
+.cell{background:#16171c;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:12px;cursor:pointer;user-select:none;position:relative}
+.cell.stone{background:#9a9a9a}
+.cell.sel{outline:3px solid #fff;outline-offset:-3px}
+.cell.group::after{content:"★";color:#fff;font-size:12px;position:absolute;top:1px;right:3px}
+.cell.new{animation:pop .4s}
+@keyframes pop{from{transform:scale(.3)}to{transform:scale(1)}}
+#top{display:flex;justify-content:space-between;align-items:center;width:min(92vw,440px);margin:0 auto;font-size:15px}
+#turn{padding:6px 10px;border-radius:6px;font-weight:bold}
+#turnbar{height:8px;background:#444;border-radius:4px;width:min(92vw,440px);margin:6px auto;overflow:hidden}
+#turnfill{height:100%;background:#fff;width:100%}
+#scores{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin:6px 0}
+.sc{padding:4px 8px;border-radius:6px;font-size:14px;color:#000;font-weight:bold}
+.sc.active{outline:3px solid #fff}
+#arrows{display:grid;grid-template-columns:repeat(3,56px);grid-template-rows:repeat(2,46px);gap:4px;justify-content:center;margin:6px auto}
+#arrows button{margin:0;padding:0;font-size:22px}
+#msg{text-align:center;min-height:22px;font-size:14px;color:#ccc}
+.hidden{display:none!important}
+table{border-collapse:collapse;margin:8px auto}td,th{padding:4px 10px;border-bottom:1px solid #444}
+select{font-size:16px;padding:4px}
+</style>
+</head>
+<body>
+<h1>Claim &amp; Shift</h1>
+
+<div id="start" class="panel">
+  <div class="rules">
+    <b>Regeln (Hot-Seat, ein Gerät):</b>
+    <ul>
+      <li>Ihr seid reihum dran. Pro Zug <b>eine Aktion</b>, Zeit pro Zug: <b>6 s</b> – sonst verfällt der Zug.</li>
+      <li><b>Claim:</b> Tippe einen <b>grauen</b> Stein an → er gehört dir.</li>
+      <li><b>Shift:</b> Tippe einen <b>eigenen</b> Stein an, dann Pfeil (oder Pfeiltaste / Wischen). Der Stein rückt 1 Feld und <b>schiebt</b> alle Steine direkt davor mit. Nur möglich, wenn in der Reihe noch ein freies Feld ist – nichts fällt raus.</li>
+      <li>Nach jedem Zug erscheint ein neuer grauer Stein.</li>
+      <li><b>Punkte:</b> 1 pro eigenem Stein. Gruppen ab <b>3</b> waagerecht/senkrecht verbundenen Steinen (★) zählen <b>doppelt</b>.</li>
+      <li>Runde dauert <b>75 s</b> (oder bis das Feld voll ist). <b>3 Runden</b>, meiste Gesamtpunkte gewinnt.</li>
+    </ul>
+  </div>
+  <p>Spieler: <select id="np"><option>2</option><option>3</option><option>4</option></select>
+  <button id="go">Spiel starten</button></p>
+</div>
+
+<div id="game" class="hidden">
+  <div id="top"><span id="round"></span><span id="turn"></span><span id="clock"></span></div>
+  <div id="turnbar"><div id="turnfill"></div></div>
+  <div id="scores"></div>
+  <div id="board"></div>
+  <div id="msg"></div>
+  <div id="arrows">
+    <span></span><button data-d="up">↑</button><span></span>
+    <button data-d="left">←</button><button data-d="down">↓</button><button data-d="right">→</button>
+  </div>
+  <div style="text-align:center"><button class="sec" id="skip">Zug aussetzen</button><button class="sec" id="pause">Pause</button></div>
+</div>
+
+<div id="between" class="panel hidden" style="text-align:center">
+  <h2 id="btitle"></h2>
+  <div id="btable"></div>
+  <button id="next"></button>
+</div>
+
+<script>
+const N=7, ROUND_TIME=75, TURN_TIME=6, ROUNDS=3, START_STONES=10;
+const COLORS=['#ff5a5a','#4fc3ff','#ffd54a','#7be37b'];
+const NAMES=['Rot','Blau','Gelb','Grün'];
+const DIRS={up:[-1,0],down:[1,0],left:[0,-1],right:[0,1]};
+let S=null; // state
+const $=id=>document.getElementById(id);
+
+function newMatch(np){S={np,round:1,total:Array(np).fill(0),startPlayer:0};newRound();}
+function newRound(){
+  S.grid=Array.from({length:N},()=>Array(N).fill(null)); // null=leer, -1=neutral, 0..3=Spieler
+  for(let i=0;i<START_STONES;i++)spawn();
+  S.cur=S.startPlayer; S.sel=null; S.roundLeft=ROUND_TIME; S.turnLeft=TURN_TIME; S.paused=false; S.last=performance.now(); S.newCell=null; S.running=true;
+  show('game'); msg(''); render(); requestAnimationFrame(tick);
+}
+function empties(){const e=[];for(let r=0;r<N;r++)for(let c=0;c<N;c++)if(S.grid[r][c]===null)e.push([r,c]);return e;}
+function spawn(){const e=empties();if(!e.length)return false;const [r,c]=e[Math.floor(Math.random()*e.length)];S.grid[r][c]=-1;S.newCell=r*N+c;return true;}
+
+function groups(){ // returns {score per player, set of cells in bonus groups}
+  const seen=new Set(), bonus=new Set(), score=Array(S.np).fill(0);
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const o=S.grid[r][c]; if(o===null||o<0||seen.has(r*N+c))continue;
+    const stack=[[r,c]], cells=[]; seen.add(r*N+c);
+    while(stack.length){const [a,b]=stack.pop();cells.push(a*N+b);
+      for(const [dr,dc] of Object.values(DIRS)){const x=a+dr,y=b+dc;
+        if(x>=0&&y>=0&&x<N&&y<N&&S.grid[x][y]===o&&!seen.has(x*N+y)){seen.add(x*N+y);stack.push([x,y]);}}}
+    const big=cells.length>=3; score[o]+=cells.length*(big?2:1); if(big)cells.forEach(k=>bonus.add(k));
+  }
+  return {score,bonus};
+}
+
+function endTurn(){
+  S.sel=null; spawn();
+  S.cur=(S.cur+1)%S.np; S.turnLeft=TURN_TIME;
+  if(!empties().length){endRound('Feld ist voll!');return;}
+  render();
+}
+function claim(r,c){ if(S.grid[r][c]!==-1)return false; S.grid[r][c]=S.cur; msg(NAMES[S.cur]+' claimt einen Stein.'); return true; }
+function shift(dir){
+  if(!S.sel)return msg('Erst einen eigenen Stein antippen.');
+  const [dr,dc]=DIRS[dir]; let [r,c]=S.sel;
+  // finde erste Lücke in Richtung
+  let x=r+dr,y=c+dc;
+  while(x>=0&&y>=0&&x<N&&y<N&&S.grid[x][y]!==null){x+=dr;y+=dc;}
+  if(!(x>=0&&y>=0&&x<N&&y<N)){msg('Geht nicht: keine Lücke in dieser Richtung.');return;}
+  // von der Lücke rückwärts alles um 1 schieben
+  while(!(x===r&&y===c)){S.grid[x][y]=S.grid[x-dr][y-dc];x-=dr;y-=dc;}
+  S.grid[r][c]=null;
+  msg(NAMES[S.cur]+' schiebt.');
+  endTurn();
+}
+function clickCell(r,c){
+  if(!S.running||S.paused)return;
+  const o=S.grid[r][c];
+  if(o===-1){claim(r,c);endTurn();return;}
+  if(o===S.cur){S.sel=(S.sel&&S.sel[0]===r&&S.sel[1]===c)?null:[r,c];render();return;}
+  if(o===null)msg('Leeres Feld.'); else msg('Gehört '+NAMES[o]+' – nur eigene Steine schieben.');
+}
+
+function endRound(why){
+  S.running=false;
+  const {score}=groups();
+  score.forEach((s,i)=>S.total[i]+=s);
+  const last=S.round>=ROUNDS;
+  let h='<table><tr><th>Spieler</th><th>Runde</th><th>Gesamt</th></tr>';
+  for(let i=0;i<S.np;i++)h+=`<tr><td style="color:${COLORS[i]}">${NAMES[i]}</td><td>${score[i]}</td><td>${S.total[i]}</td></tr>`;
+  h+='</table>';
+  if(last){const m=Math.max(...S.total);const w=S.total.map((t,i)=>t===m?NAMES[i]:null).filter(Boolean);
+    h+=`<h3>${w.length>1?'Unentschieden: '+w.join(' & '):'Sieger: '+w[0]} 🎉</h3>`;}
+  $('btitle').textContent=(why?why+' ':'')+'Runde '+S.round+' vorbei';
+  $('btable').innerHTML=h;
+  $('next').textContent=last?'Neues Spiel':'Runde '+(S.round+1)+' starten';
+  show('between');
+}
+$('next').onclick=()=>{ if(S.round>=ROUNDS){show('start');return;} S.round++; S.startPlayer=(S.startPlayer+1)%S.np; newRound(); };
+
+function tick(t){
+  if(!S||!S.running)return;
+  const dt=(t-S.last)/1000; S.last=t;
+  if(!S.paused){
+    S.roundLeft-=dt; S.turnLeft-=dt;
+    if(S.roundLeft<=0){endRound('Zeit um!');return;}
+    if(S.turnLeft<=0){msg(NAMES[S.cur]+' war zu langsam – Zug verfällt.');endTurn();}
+  }
+  $('clock').textContent='⏱ '+Math.ceil(Math.max(0,S.roundLeft))+' s';
+  $('turnfill').style.width=Math.max(0,S.turnLeft/TURN_TIME*100)+'%';
+  requestAnimationFrame(tick);
+}
+
+function render(){
+  const {score,bonus}=groups(); const b=$('board'); b.innerHTML='';
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const d=document.createElement('div'); const o=S.grid[r][c]; d.className='cell';
+    if(o!==null){d.classList.add('stone'); if(o>=0)d.style.background=COLORS[o];}
+    if(bonus.has(r*N+c))d.classList.add('group');
+    if(S.sel&&S.sel[0]===r&&S.sel[1]===c)d.classList.add('sel');
+    if(S.newCell===r*N+c)d.classList.add('new');
+    d.onpointerdown=e=>{sw={x:e.clientX,y:e.clientY,r,c};};
+    d.onpointerup=e=>{ if(!sw)return; const dx=e.clientX-sw.x,dy=e.clientY-sw.y; const s=sw; sw=null;
+      if(Math.hypot(dx,dy)>25 && S.grid[s.r][s.c]===S.cur){ S.sel=[s.r,s.c]; shift(Math.abs(dx)>Math.abs(dy)?(dx>0?'right':'left'):(dy>0?'down':'up')); }
+      else clickCell(s.r,s.c); };
+    b.appendChild(d);
+  }
+  S.newCell=null;
+  $('round').textContent='Runde '+S.round+'/'+ROUNDS;
+  const t=$('turn'); t.textContent=NAMES[S.cur]+' ist dran'; t.style.background=COLORS[S.cur]; t.style.color='#000';
+  $('turnfill').style.background=COLORS[S.cur];
+  $('scores').innerHTML=score.map((s,i)=>`<span class="sc${i===S.cur?' active':''}" style="background:${COLORS[i]}">${NAMES[i]}: ${s} <small>(ges. ${S.total[i]})</small></span>`).join('');
+}
+let sw=null;
+document.addEventListener('pointerup',()=>{});
+function msg(m){$('msg').textContent=m;}
+function show(id){['start','game','between'].forEach(x=>$(x).classList.toggle('hidden',x!==id));}
+document.querySelectorAll('#arrows button').forEach(btn=>btn.onclick=()=>{if(S&&S.running&&!S.paused)shift(btn.dataset.d);});
+document.addEventListener('keydown',e=>{const m={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right'}[e.key];
+  if(m&&S&&S.running&&!S.paused){e.preventDefault();shift(m);}});
+$('skip').onclick=()=>{if(S.running&&!S.paused){msg(NAMES[S.cur]+' setzt aus.');endTurn();}};
+$('pause').onclick=()=>{S.paused=!S.paused;$('pause').textContent=S.paused?'Weiter':'Pause';msg(S.paused?'Pausiert':'');};
+$('go').onclick=()=>newMatch(+$('np').value);
+</script>
+</body>
+</html>
